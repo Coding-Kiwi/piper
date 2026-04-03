@@ -16,25 +16,21 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dataset-dir", required=True, help="Path to pre-processed dataset directory"
-    )
-    parser.add_argument(
-        "--checkpoint-epochs",
-        type=int,
-        help="Save checkpoint every N epochs (default: 1)",
-    )
-    parser.add_argument(
-        "--quality",
-        default="medium",
-        choices=("x-low", "medium", "high"),
-        help="Quality/size of model (default: medium)",
-    )
-    parser.add_argument(
-        "--resume_from_single_speaker_checkpoint",
-        help="For multi-speaker models only. Converts a single-speaker checkpoint to multi-speaker and resumes training",
-    )
-    Trainer.add_argparse_args(parser)
+    parser.add_argument("--dataset-dir", required=True)
+    parser.add_argument("--checkpoint-epochs", type=int)
+    parser.add_argument("--quality", default="medium", choices=("x-low", "medium", "high"))
+    parser.add_argument("--resume_from_single_speaker_checkpoint")
+    
+    # --- MANUALLY ADD TRAINER ARGUMENTS ---
+    # These replace the old Trainer.add_argparse_args(parser)
+    parser.add_argument("--accelerator", type=str, default="gpu")
+    parser.add_argument("--devices", type=int, default=1)
+    parser.add_argument("--max_epochs", type=int, default=1000)
+    parser.add_argument("--precision", type=str, default="32")
+    parser.add_argument("--resume_from_checkpoint", type=str, help="Path to checkpoint to resume from")
+    parser.add_argument("--default_root_dir", type=str)
+    # --------------------------------------
+
     VitsModel.add_model_specific_args(parser)
     parser.add_argument("--seed", type=int, default=1234)
     args = parser.parse_args()
@@ -57,12 +53,18 @@ def main():
         num_speakers = int(config["num_speakers"])
         sample_rate = int(config["audio"]["sample_rate"])
 
-    trainer = Trainer.from_argparse_args(args)
+    # --- INITIALIZE TRAINER MANUALLY ---
+    # We map the CLI args directly to the Trainer constructor
+    trainer = Trainer(
+        accelerator=args.accelerator,
+        devices=args.devices,
+        max_epochs=args.max_epochs,
+        precision=args.precision if args.precision != "32" else "32-true", # PL 2.x uses "32-true"
+        default_root_dir=args.default_root_dir,
+    )
+
     if args.checkpoint_epochs is not None:
-        trainer.callbacks = [ModelCheckpoint(every_n_epochs=args.checkpoint_epochs)]
-        _LOGGER.debug(
-            "Checkpoints will be saved every %s epoch(s)", args.checkpoint_epochs
-        )
+        trainer.callbacks.append(ModelCheckpoint(every_n_epochs=args.checkpoint_epochs))
 
     dict_args = vars(args)
     if args.quality == "x-low":
@@ -121,7 +123,7 @@ def main():
             "Successfully converted single-speaker checkpoint to multi-speaker"
         )
 
-    trainer.fit(model)
+    trainer.fit(model, ckpt_path=args.resume_from_checkpoint)
 
 
 def load_state_dict(model, saved_state_dict):
