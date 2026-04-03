@@ -39,9 +39,14 @@ def main() -> None:
     args.output = Path(args.output)
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
+    # 1. Force the model onto the CPU for the export
+    device = torch.device("cpu")
+    _LOGGER.info("Loading model on %s for ONNX export...", device)
+    
     model = VitsModel.load_from_checkpoint(args.checkpoint, dataset=None)
+    model.to(device)
+    
     model_g = model.model_g
-
     num_symbols = model_g.n_vocab
     num_speakers = model_g.n_speakers
 
@@ -50,8 +55,6 @@ def main() -> None:
 
     with torch.no_grad():
         model_g.dec.remove_weight_norm()
-
-    # old_forward = model_g.infer
 
     def infer_forward(text, text_lengths, scales, sid=None):
         noise_scale = scales[0]
@@ -70,20 +73,23 @@ def main() -> None:
 
     model_g.forward = infer_forward
 
+    # 2. Force all dummy inputs onto the exact same CPU device
     dummy_input_length = 50
     sequences = torch.randint(
-        low=0, high=num_symbols, size=(1, dummy_input_length), dtype=torch.long
+        low=0, high=num_symbols, size=(1, dummy_input_length), dtype=torch.long, device=device
     )
-    sequence_lengths = torch.LongTensor([sequences.size(1)])
+    sequence_lengths = torch.LongTensor([sequences.size(1)]).to(device)
 
     sid: Optional[torch.LongTensor] = None
     if num_speakers > 1:
-        sid = torch.LongTensor([0])
+        sid = torch.LongTensor([0]).to(device)
 
     # noise, length, noise_w
-    scales = torch.FloatTensor([0.667, 1.0, 0.8])
+    scales = torch.FloatTensor([0.667, 1.0, 0.8]).to(device)
     dummy_input = (sequences, sequence_lengths, scales, sid)
 
+    _LOGGER.info("Tracing and exporting model to ONNX...")
+    
     # Export
     torch.onnx.export(
         model=model_g,
@@ -100,7 +106,7 @@ def main() -> None:
         },
     )
 
-    _LOGGER.info("Exported model to %s", args.output)
+    _LOGGER.info("Successfully exported model to %s", args.output)
 
 
 # -----------------------------------------------------------------------------
