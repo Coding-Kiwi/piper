@@ -34,7 +34,11 @@ def main():
     args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _LOGGER.info("Using device: %s", device)
+
     model = VitsModel.load_from_checkpoint(args.checkpoint, dataset=None)
+    model.to(device)  # Move weights to GPU
 
     # Inference only
     model.eval()
@@ -52,13 +56,19 @@ def main():
         phoneme_ids = utt["phoneme_ids"]
         speaker_id = utt.get("speaker_id")
 
-        text = torch.LongTensor(phoneme_ids).unsqueeze(0)
-        text_lengths = torch.LongTensor([len(phoneme_ids)])
+        text = torch.LongTensor(phoneme_ids).unsqueeze(0).to(device)
+        text_lengths = torch.LongTensor([len(phoneme_ids)]).to(device)
         scales = [args.noise_scale, args.length_scale, args.noise_w]
-        sid = torch.LongTensor([speaker_id]) if speaker_id is not None else None
+        sid = torch.LongTensor([speaker_id]).to(device) if speaker_id is not None else None
+
+        scales = [args.noise_scale, args.length_scale, args.noise_w]
 
         start_time = time.perf_counter()
-        audio = model(text, text_lengths, scales, sid=sid).detach().numpy()
+
+        with torch.no_grad():
+            audio = model(text, text_lengths, scales, sid=sid)
+            audio = audio.detach().cpu().numpy() # Bring back to CPU here
+
         audio = audio_float_to_int16(audio)
         end_time = time.perf_counter()
 
